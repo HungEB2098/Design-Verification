@@ -1,6 +1,6 @@
 # RAL Project
 
-![Alt text](result.png)
+![Alt text](architecture.png)
 
 
 
