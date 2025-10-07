@@ -1,19 +1,17 @@
-// Code your testbench here
-// or browse Examples
 `include "uvm_macros.svh"
 import uvm_pkg::*;
 
 class transaction extends uvm_sequence_item;
-  `uvm_object_items(transaction)
+  `uvm_object_utils(transaction)
 
     rand bit [31:0] addr;
     rand bit        wr_en;
          bit        valid;
     rand bit [31:0] wdata;
-         bit [31:0] wdata;
+  		 bit [31:0] rdata;
 
-    function void new (input string name = "transaction");
-        super.new(transaction);
+    function new (input string name = "transaction");
+      super.new(name);
     endfunction
 
     constraint c {
@@ -23,63 +21,66 @@ class transaction extends uvm_sequence_item;
 
 endclass
 
-class driver extends uvm_driver;
+class driver extends uvm_driver #(transaction);
     `uvm_component_utils(driver)
 
     virtual dma_if dif;
     transaction t;
 
-    function void new(input string name = "driver", uvm_component parent = null);
+    function new(input string name = "driver", uvm_component parent = null);
         super.new(name,parent);
     endfunction
 
     virtual function void build_phase (uvm_phase phase);
         super.build_phase(phase);
-        t = transaction::type_id::create("t");
-        if (!uvm_config_db #(virtual dif) ::get (this, "", "dif", dif))
+        //t = transaction::type_id::create("t");
+      if (!uvm_config_db #(virtual dma_if) ::get (this, "", "dif", dif))
         `uvm_error("DRV", "ERROR");
 
     endfunction
 
-    function void reset ();
+    virtual task reset ();
         @(posedge dif.clk);
         dif.reset <= 1;
         dif.addr <= 0;
-        dif.wr_en <= 0;
         dif.valid <= 0;
         dif.wdata <= 0;
-        dif.rdata <= 0;
+        //dif.rdata <= 0;
         @(posedge dif.clk);
         dif.reset <= 0;
-    endfunction
+    endtask
 
-    function void write();
-        @(posedge clk);
+    virtual task write();
+        @(posedge dif.clk);
         dif.addr <= t.addr;
         dif.wr_en <= 1'b1;
         dif.valid <= 1'b1;
         dif.wdata <= t.wdata;
         //dif.rdata <= t.rdata;
-        @(posedge clk);
-        `uvm_info("driver", $sformatf("Mode : Write WDATA : %0d ADDR : %0d", dif.wdata, dif.addr), UVM_NONE);
-    endfunction
+        @(posedge dif.clk);
+        `uvm_info("driver", $sformatf("Time: %0t | Mode : Write | WDATA : %0d ADDR : %0d", $time, dif.wdata, dif.addr), UVM_NONE);
+        dif.valid <= 1'b0;
+        @(posedge dif.clk);
+    endtask
 
-    function void read();
-        @(posedge clk);
+    virtual task read();
+        @(posedge dif.clk);
         dif.addr <= t.addr;
         dif.wr_en <= 1'b0;
         dif.valid <= 1'b1;
         
         //dif.rdata <= t.rdata;
-        @(posedge clk);
-        t.rdata <= dif.rdata;
-        `uvm_info("driver", $sformatf("Mode : Read RDATA : %0d ADDR : %0d", dif.rdata, dif.addr), UVM_NONE);
-    endfunction
+        repeat(2) @(posedge dif.clk);
+        dif.valid <= 1'b0;
+        t.rdata = dif.rdata;
+        
+        `uvm_info("driver", $sformatf("Time: %0t | Mode : Read RDATA : %0d ADDR : %0d", $time, dif.rdata, dif.addr), UVM_NONE);
+    endtask
 
     virtual task run_phase (uvm_phase phase);
         reset();
         forever begin
-            seq_item_port.get_next_item(t);
+          seq_item_port.get_next_item(t);
             if (t.wr_en & t.valid) begin
                 write();
             end else if (!t.wr_en & t.valid) begin
@@ -96,8 +97,8 @@ class monitor extends uvm_monitor;
     `uvm_component_utils(monitor)
 
     virtual dma_if dif;
-    transaction t;
-    `uvm_analysis_port #(transaction) p;
+    //transaction t;
+    uvm_analysis_port #(transaction) p;
 
     function new (input string name = "monitor", uvm_component parent = null);
         super.new(name, parent);
@@ -105,35 +106,42 @@ class monitor extends uvm_monitor;
 
     virtual function void build_phase(uvm_phase phase);
         super.build_phase(phase);
-        t = transaction::type_id::create("t");
-        p = new("p");
-        if (!uvm_config_db#(virtual dma_if)::get(null, "", "dif", dif))
+      	p = new("p", this);
+        if (!uvm_config_db#(virtual dma_if)::get(this, "", "dif", dif))
         `uvm_error("monitor", "ERROR");
     endfunction
 
     virtual task run_phase(uvm_phase phase);
+        transaction t = transaction::type_id::create("t");
+        fork
         forever begin
-            
-            if(dif.wr_en & dif.valid) begin
-                @(posedge clk);
-                t.addr = dif.addr;
-                //t.wr_en = 1'b1;
-                //t.valid = 1'b1;
-                t.wdata = dif.wdata;
-                @(posedge clk);
-                `uvm_info("monitor", $sformatf("Mode : Write WDATA : %0d ADDR : %0d", dif.wdata, dif.addr), UVM_NONE);
-            end else if (!dif.wr_en & dif.valid) begin
-                @(posedge clk);
-                t.addr = dif.addr;
-                //t.wr_en = 1'b1;
-                //t.valid = 1'b1;
-                t.rdata = dif.rdata;
-                @(posedge clk);
-                `uvm_info("monitor", $sformatf("Mode : Read WDATA : %0d ADDR : %0d", dif.wdata, dif.addr), UVM_NONE);
-            end
-            p.write(t);
-        end
+            @(posedge dif.clk);
 
+            if (dif.valid) begin
+                t.addr = dif.addr;
+                t.wr_en = dif.wr_en;
+                t.valid = dif.valid;
+
+                if (dif.wr_en) begin
+                    t.wdata = dif.wdata;
+                    @(posedge dif.clk);
+                    `uvm_info("monitor",
+                              $sformatf("Time: %0t | Mode : Write | WDATA : %0d ADDR : %0d", $time, 
+                                        dif.wdata, dif.addr),
+                              UVM_NONE);
+                end
+                else begin
+                    @(posedge dif.clk);
+                    t.rdata = dif.rdata;
+                    `uvm_info("monitor",
+                              $sformatf("Time: %0t | Mode : Read | RDATA : %0d ADDR : %0d", $time,
+                                        dif.rdata, dif.addr),
+                              UVM_NONE);
+                end
+                p.write(t);
+            end
+        end
+        join_none
     endtask
 
 endclass
@@ -143,7 +151,7 @@ class scoreboard extends uvm_scoreboard;
 
     uvm_analysis_imp #(transaction, scoreboard) i;
     transaction t;
-    bit [31:0] arr [32];
+    bit [31:0] arr [*];
     bit [31:0] temp;
 
     function new (input string name = "scoreboard", uvm_component parent = null);
@@ -153,24 +161,21 @@ class scoreboard extends uvm_scoreboard;
     virtual function void build_phase(uvm_phase phase);
         super.build_phase(phase);
         t = transaction::type_id::create("t");
-        i = new("i");
+      i = new("i", this);
     endfunction
 
     virtual function void write (transaction t);
-        if (t.reset == 1) `uvm_info("scoreboard", "Reset", UVM_NONE);
-        else begin
-            if(t.wr_en & t.valid) begin
-                arr[t.addr] = t.wdata;
-                `uvm_info("scoreboard", $sformatf("DATA Stored Addr : %0d Data :%0d", t.addr, t.wdata), UVM_NONE);
-            end else begin
-                temp = arr[t.addr];
-                if(temp == t.rdata) 
-                    `uvm_info("SCO", $sformatf("Test Passed -> Addr : %0d Data :%0d", t.paddr, t.wdata), UVM_NONE);
-                else 
-                    `uvm_info("SCO", $sformatf("Test Failed -> Addr : %0d Data :%0d", t.paddr, t.wdata), UVM_NONE);
-
-            end
+        if(t.wr_en & t.valid) begin
+            arr[t.addr] = t.wdata;
+            `uvm_info("scoreboard", $sformatf("DATA Stored | Addr : %0d Data :%0d", t.addr, t.wdata), UVM_NONE)
+        end else begin
+            temp = arr[t.addr];
+            if(temp == t.rdata) 
+                `uvm_info("SCO", $sformatf("Test Passed -> Addr : %0d Data :%0d", t.addr, t.wdata), UVM_NONE)
+            else 
+                `uvm_info("SCO", $sformatf("Test Failed -> Addr : %0d Data :%0d", t.addr, t.wdata), UVM_NONE)
         end
+
         $display("----------------------------------------------------------------");
     endfunction
 
@@ -191,24 +196,24 @@ class agent extends uvm_agent;
         super.build_phase(phase);
         d = driver::type_id::create("driver",this);
         m = monitor::type_id::create("monitor", this);
-        sqr = uvm_sequence#(transaction)::type_id::create("sqr", this);
+        sqr = uvm_sequencer#(transaction)::type_id::create("sqr", this);
 
     endfunction
 
     virtual function void connect_phase(uvm_phase phase);
         super.connect_phase(phase);
-        d.seq_item_port(sqr.seq_item_export);
+        d.seq_item_port.connect(sqr.seq_item_export);
     endfunction
 
 endclass
 
-class intr_reg extends uvm_reg;
-    `uvm_object_utils(intr_reg)
+class intr extends uvm_reg;
+    `uvm_object_utils(intr)
 
     rand uvm_reg_field mask;
     rand uvm_reg_field status;
 
-    function new (string name = "intr_reg");
+    function new (string name = "intr");
         super.new(name, 32, build_coverage(UVM_NO_COVERAGE)); // register width = 32
     endfunction
 
@@ -243,15 +248,15 @@ class intr_reg extends uvm_reg;
 
 endclass
 
-class ctrl_reg extends uvm_reg;
-    `uvm_object_utils(ctrl_reg)
+class ctrl extends uvm_reg;
+    `uvm_object_utils(ctrl)
 
     rand uvm_reg_field start_dma;
     rand uvm_reg_field w_count;
     rand uvm_reg_field io_mem;
     rand uvm_reg_field resvd;
 
-    function new (string name = "intr_reg");
+    function new (string name = "ctrl");
         super.new(name, 32, build_coverage(UVM_NO_COVERAGE)); // register width = 32
     endfunction
 
@@ -369,8 +374,8 @@ endclass
 class reg_block extends uvm_reg_block;
     `uvm_object_utils(reg_block)
 
-    intr_reg intr1;
-    ctrl_reg ctrl1;
+    intr intr1;
+    ctrl ctrl1;
     io_addr io1;
     mem_addr mem1;
 
@@ -378,14 +383,14 @@ class reg_block extends uvm_reg_block;
         super.new(name, build_coverage(UVM_NO_COVERAGE));
     endfunction
 
-    virtual function void build();
-        default_map() = create_map("default_map");
+    function void build();
+      	default_map = create_map("default_map", 0, 4, UVM_LITTLE_ENDIAN);
 
-        intr1 = intr_reg::type_id::create("intr1");
+        intr1 = intr::type_id::create("intr1");
         intr1.build();
         intr1.configure(this,null);
 
-        ctrl1 = ctrl_reg::type_id::create("ctrl1");
+        ctrl1 = ctrl::type_id::create("ctrl1");
         ctrl1.build();
         ctrl1.configure(this,null);
 
@@ -420,8 +425,10 @@ class top_adapter extends uvm_reg_adapter;
     
         t.wr_en    = (rw.kind == UVM_WRITE) ? 1'b1 : 1'b0;
         t.addr     = rw.addr;
-        t.wdata    = rw.data;
-
+        t.valid    = 1'b1;
+        if (t.wr_en) t.wdata    = rw.data;
+        if (!t.wr_en) t.rdata    = rw.data;            // an toàn để khởi tạo
+        
         return t;
     endfunction
 
@@ -430,8 +437,9 @@ class top_adapter extends uvm_reg_adapter;
     
         assert($cast(t, bus_item));
 
-        rw.kind = (t.wr_en == 1'b1) ? UVM_WRITE : UVM_READ;
-        rw.data = (t.wr_en == 1'b1) ? r.wdata : t.rdata;
+        rw.kind = (t.wr_en) ? UVM_WRITE : UVM_READ;
+        //rw.data = (t.wr_en == 1'b1) ? t.wdata : t.rdata;
+        rw.data = t.rdata;
         rw.addr = t.addr;
         rw.status = UVM_IS_OK;
     endfunction
@@ -466,14 +474,310 @@ class env extends uvm_env;
     endfunction
 
     function void connect_phase(uvm_phase phase);
-        a.m.mon_ap.connect(s.recv);
-        a.m.mon_ap.connect(predictor_inst.bus_in);
+        a.m.p.connect(s.i);
+        a.m.p.connect(predictor_inst.bus_in);
     
         regmodel.default_map.set_sequencer( .sequencer(a.sqr), .adapter(adapter_inst) );
-        regmodel.default_map.set_base_addr(0);
+        regmodel.default_map.set_base_addr('h400);
     
         predictor_inst.map       = regmodel.default_map;
         predictor_inst.adapter   = adapter_inst;
     endfunction 
 
 endclass
+
+class ctrl_wr extends uvm_sequence;
+    `uvm_object_utils(ctrl_wr)
+
+    reg_block regmodel;
+
+    function new(input string name = "ctrl_wr");
+        super.new(name);
+    endfunction
+
+    task body();
+        uvm_status_e   status;
+        bit [31:0] wdata; 
+    
+        for(int i = 0; i < 3; i++) begin
+            wdata = $urandom();
+            regmodel.ctrl1.write(status, wdata);
+        end
+    endtask
+
+endclass
+
+class ctrl_rd extends uvm_sequence;
+    `uvm_object_utils(ctrl_rd)
+  
+    reg_block regmodel;
+  
+    function new (string name = "ctrl_rd"); 
+        super.new(name);    
+    endfunction
+  
+
+    task body;  
+        uvm_status_e   status;
+        bit [31:0] rdata;
+        for(int i = 0; i < 3; i++) begin
+            regmodel.ctrl1.read(status, rdata); 
+        end
+    endtask
+  
+endclass
+
+class intr_wr extends uvm_sequence;
+    `uvm_object_utils(intr_wr)
+
+    reg_block regmodel;
+
+    function new(input string name = "intr_wr");
+        super.new(name);
+    endfunction
+
+    task body();
+        uvm_status_e   status;
+        bit [31:0] wdata; 
+    
+        for(int i = 0; i < 3; i++) begin
+            wdata = $urandom();
+            regmodel.intr1.write(status, wdata);
+        end
+    endtask
+
+endclass
+
+class intr_rd extends uvm_sequence;
+    `uvm_object_utils(intr_rd)
+  
+    reg_block regmodel;
+  
+    function new (string name = "intr_rd"); 
+        super.new(name);    
+    endfunction
+  
+
+    task body;  
+        uvm_status_e status;
+        bit [31:0] rdata;
+        for(int i = 0; i < 3; i++) begin
+            regmodel.intr1.read(status, rdata); 
+        end
+    endtask
+  
+endclass  
+
+class io_wr extends uvm_sequence;
+    `uvm_object_utils(io_wr)
+
+    reg_block regmodel;
+
+    function new(input string name = "io_wr");
+        super.new(name);
+    endfunction
+
+    task body();
+        uvm_status_e   status;
+        bit [31:0] wdata; 
+    
+        for(int i = 0; i < 3; i++) begin
+            wdata = $urandom();
+            regmodel.io1.write(status, wdata);
+        end
+    endtask
+
+endclass
+
+class io_rd extends uvm_sequence;
+  `uvm_object_utils(io_rd)
+  
+    reg_block regmodel;
+  
+    function new (string name = "io_rd"); 
+        super.new(name);    
+    endfunction
+  
+
+    task body;  
+        uvm_status_e   status;
+        bit [31:0] rdata;
+        for(int i = 0; i < 3; i++) begin
+            regmodel.io1.read(status, rdata); 
+        end
+    endtask
+  
+endclass  
+
+class mem_wr extends uvm_sequence;
+    `uvm_object_utils(mem_wr)
+
+    reg_block regmodel;
+
+    function new(input string name = "mem_wr");
+        super.new(name);
+    endfunction
+
+    task body();
+        uvm_status_e   status;
+        bit [31:0] wdata; 
+    
+        for(int i = 0; i < 3; i++) begin
+            wdata = $urandom();
+            regmodel.mem1.write(status, wdata);
+        end
+    endtask
+
+endclass
+
+class mem_rd extends uvm_sequence;
+    `uvm_object_utils(mem_rd)
+  
+    reg_block regmodel;
+  
+    function new (string name = "mem_rd"); 
+        super.new(name);    
+    endfunction
+  
+
+    task body;  
+        uvm_status_e   status;
+        bit [31:0] rdata;
+        for(int i = 0; i < 3; i++) begin
+            regmodel.mem1.read(status, rdata); 
+        end
+    endtask
+  
+endclass  
+
+class dma_reg_seq extends uvm_sequence;
+
+  `uvm_object_utils(dma_reg_seq)
+  
+  reg_block regmodel;
+  
+  //---------------------------------------
+  // Constructor 
+  //---------------------------------------    
+  function new (string name = "dma_reg_seq"); 
+    super.new(name);    
+  endfunction
+  
+  //---------------------------------------
+  // Sequence body 
+  //---------------------------------------      
+  task body;  
+    uvm_status_e   status;
+    uvm_reg_data_t incoming;
+    bit [31:0] wdata;
+    bit [31:0] rdata;
+    
+    if (starting_phase != null)
+      starting_phase.raise_objection(this);
+    
+    //Write to the Registers
+    wdata = $urandom();
+    regmodel.intr1.write(status, wdata);
+    wdata = $urandom();
+    regmodel.ctrl1.write(status, wdata);
+    wdata = $urandom();
+    regmodel.io1.write(status, wdata);
+    wdata = $urandom();
+    regmodel.mem1.write(status, wdata);
+    
+    //Read from the registers
+    regmodel.intr1.read(status, rdata);
+    regmodel.ctrl1.read(status, rdata);
+    regmodel.io1.read(status, rdata);
+    regmodel.mem1.read(status, rdata);
+      
+    if (starting_phase != null)
+      starting_phase.drop_objection(this);  
+    
+  endtask
+endclass
+
+class test extends uvm_test;
+    `uvm_component_utils(test)
+
+    function new(input string inst = "test", uvm_component c);
+        super.new(inst,c);
+    endfunction
+
+    env e;
+
+    ctrl_wr  cwr;
+    ctrl_rd  crd;
+
+    intr_wr  iwr;
+    intr_rd  ird;
+
+    io_wr  iowr;
+    io_rd  iord;
+
+    mem_wr  mwr;
+    mem_rd  mrd;
+
+    dma_reg_seq dseq;
+
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+
+        e = env::type_id::create("env",this);
+  
+        cwr = ctrl_wr::type_id::create("cwr");
+        crd = ctrl_rd::type_id::create("crd");
+
+        iwr = intr_wr::type_id::create("iwr");
+        ird = intr_rd::type_id::create("ird");
+
+        iowr = io_wr::type_id::create("iowr");
+        iord = io_rd::type_id::create("iord");
+
+        mwr = mem_wr::type_id::create("mwr");
+        mrd = mem_rd::type_id::create("mrd");
+
+        dseq = dma_reg_seq::type_id::create("dseq");
+    endfunction
+
+    virtual task run_phase(uvm_phase phase);
+        phase.raise_objection(this);
+
+        // cwr.regmodel = e.regmodel;
+        // cwr.start(e.a.sqr);
+
+        // crd.regmodel = e.regmodel;
+        // crd.start(e.a.sqr);
+
+        dseq.regmodel = e.regmodel;
+        dseq.start(e.a.sqr);
+
+        phase.drop_objection(this);
+
+    endtask
+
+endclass
+
+module tb;
+    dma_if dif();
+
+    DMA dut (dif.clk, dif.reset, dif.addr, dif.wr_en, dif.valid, dif.wdata, dif.rdata);
+
+    initial begin
+        dif.clk <= 0;
+        dif.reset <= 0;
+    end
+
+    always #5 dif.clk = ~dif.clk;
+
+    initial begin
+        uvm_config_db#(virtual dma_if)::set(null, "*", "dif", dif);
+        run_test("test");
+    end
+
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars;
+    end
+
+endmodule
