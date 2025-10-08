@@ -1,10 +1,10 @@
 # DMA RAL Project
 
-![Alt text](architecture.png)
+![Alt text](pic/architecture.png)
 
 ## Waveform result
 
-![Alt text](waveform.png)
+![Alt text](pic/waveform.png)
 
 
 
